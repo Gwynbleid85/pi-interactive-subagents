@@ -12,6 +12,167 @@ import { visibleWidth } from "@mariozechner/pi-tui";
 let hasTmux = true;
 try { execFileSync("tmux", ["-V"], { stdio: "ignore" }); } catch { hasTmux = false; }
 
+describe("subagent focus Tab completion", () => {
+  let events: Map<string, Function>;
+  let listeners: Set<Function>;
+  let text: string;
+  let ctx: any;
+  const registerAgent = (name: string) => {
+    __test__.runningSubagents.set(name, { name } as any);
+  };
+  const press = (key = "\t") => {
+    let result: any;
+    for (const listener of listeners) result = listener(key);
+    return result;
+  };
+
+  beforeEach(() => {
+    events = new Map();
+    listeners = new Set();
+    text = "/subagent-focus ";
+    __test__.runningSubagents.clear();
+    subagentsExtension({
+      on(name: string, handler: Function) { events.set(name, handler); },
+      registerTool() {}, registerMessageRenderer() {}, registerCommand() {}, registerShortcut() {},
+    } as any);
+    ctx = {
+      mode: "tui", hasUI: true,
+      ui: {
+        getEditorText: () => text,
+        setStatus() {},
+        setEditorText: (value: string) => { text = value; },
+        onTerminalInput: (handler: Function) => {
+          listeners.add(handler);
+          return () => listeners.delete(handler);
+        },
+      },
+    };
+    events.get("session_start")!({}, ctx);
+  });
+
+  afterEach(() => { events.get("session_shutdown")!({}, ctx); });
+
+  it("cycles names with spaces and wraps without invoking focus", () => {
+    registerAgent("worker one");
+    registerAgent("worker two");
+    assert.deepEqual(press(), { consume: true });
+    assert.equal(text, "/subagent-focus worker one");
+    press();
+    assert.equal(text, "/subagent-focus worker two");
+    press();
+    assert.equal(text, "/subagent-focus worker one");
+  });
+
+  it("advances once per Kitty Tab press and ignores release events without resetting", () => {
+    registerAgent("worker one"); registerAgent("worker two"); registerAgent("worker three");
+    press("\x1b[9;1:1u"); assert.equal(text, "/subagent-focus worker one");
+    press("\x1b[9;1:3u"); assert.equal(text, "/subagent-focus worker one");
+    press("\x1b[57441;1:3u");
+    press("\x1b[9;1:1u"); assert.equal(text, "/subagent-focus worker two");
+  });
+
+  it("requests immediate redraw through a status update without adding a visible status", () => {
+    registerAgent("worker one"); registerAgent("worker two");
+    let renderRequests = 0;
+    const statuses = new Map<string, string>();
+    // Pi's public setStatus API schedules a render even when clearing a key.
+    ctx.ui.setStatus = (key: string, value: string | undefined) => {
+      if (value === undefined) statuses.delete(key); else statuses.set(key, value);
+      renderRequests++;
+    };
+    press();
+    assert.equal(renderRequests, 1);
+    assert.equal(text, "/subagent-focus worker one");
+    press();
+    assert.equal(renderRequests, 2);
+    assert.equal(text, "/subagent-focus worker two");
+    assert.equal(statuses.size, 0);
+  });
+
+  it("retains the typed prefix across successive completions", () => {
+    registerAgent("poet-dawn"); registerAgent("worker one"); registerAgent("poet-night");
+    text = "/subagent-focus poet-";
+    press(); assert.equal(text, "/subagent-focus poet-dawn");
+    press(); assert.equal(text, "/subagent-focus poet-night");
+    press(); assert.equal(text, "/subagent-focus poet-dawn");
+  });
+
+  it("resets after editing or non-Tab input and passes Enter through", () => {
+    registerAgent("worker one"); registerAgent("worker two"); registerAgent("poet");
+    press();
+    assert.equal(press("\r"), undefined);
+    press(); assert.equal(text, "/subagent-focus worker one");
+    text = "/subagent-focus p";
+    press(); assert.equal(text, "/subagent-focus poet");
+  });
+
+  it("uses live names when agents finish or start during cycling", () => {
+    registerAgent("worker one"); registerAgent("worker two");
+    press();
+    __test__.runningSubagents.delete("worker one"); registerAgent("worker three");
+    press(); assert.equal(text, "/subagent-focus worker two");
+    press(); assert.equal(text, "/subagent-focus worker three");
+    __test__.runningSubagents.clear();
+    assert.deepEqual(press(), { consume: true });
+    assert.equal(text, "/subagent-focus worker three");
+  });
+
+  it("preserves the original prefix across a temporarily empty running list", () => {
+    registerAgent("worker one");
+    text = "/subagent-focus worker";
+    press(); assert.equal(text, "/subagent-focus worker one");
+    __test__.runningSubagents.clear();
+    press(); assert.equal(text, "/subagent-focus worker one");
+    registerAgent("poet"); registerAgent("worker two");
+    press(); assert.equal(text, "/subagent-focus worker two");
+  });
+
+  it("consumes Tab without changing text when no running names match", () => {
+    registerAgent("worker one");
+    text = "/subagent-focus missing";
+    assert.deepEqual(press(), { consume: true });
+    assert.equal(text, "/subagent-focus missing");
+  });
+
+  it("leaves other commands, multiline prompts, and non-Tab keys alone", () => {
+    registerAgent("worker one");
+    for (const input of ["/subagent-focus", "/subagent-focus-other ", "/model ", "hello", "/subagent-focus \nhello"]) {
+      text = input;
+      assert.equal(press(), undefined);
+      assert.equal(text, input);
+    }
+    text = "/subagent-focus ";
+    assert.equal(press("x"), undefined);
+    assert.equal(text, "/subagent-focus ");
+  });
+
+  it("does not intercept Tab while an extension dialog is open", () => {
+    registerAgent("worker one");
+    events.get("ui_prompt_start")?.({}, ctx);
+    assert.equal(press(), undefined);
+    assert.equal(text, "/subagent-focus ");
+    events.get("ui_prompt_end")?.({}, ctx);
+    press(); assert.equal(text, "/subagent-focus worker one");
+  });
+
+  it("unsubscribes on shutdown and avoids duplicate listeners on session start", () => {
+    assert.equal(listeners.size, 1);
+    events.get("session_start")!({}, ctx);
+    assert.equal(listeners.size, 1);
+    events.get("session_shutdown")!({}, ctx);
+    assert.equal(listeners.size, 0);
+  });
+
+  it("does not register terminal input in non-TUI modes", () => {
+    for (const mode of ["rpc", "json", "print"]) {
+      events.get("session_shutdown")!({}, ctx);
+      ctx.mode = mode;
+      events.get("session_start")!({}, ctx);
+      assert.equal(listeners.size, 0);
+    }
+  });
+});
+
 describe("subagent focus controls", { skip: !hasTmux }, () => {
   let dir: string;
   let socket: string;

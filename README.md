@@ -23,7 +23,7 @@ Each sub-agent window starts with one pane. Switch to its window to inspect or i
 
 - Press **Ctrl+Alt+S** to choose a running subagent with ↑/↓, then **Enter** to switch to its tmux window and pane. **Escape** cancels.
 - Run **`/subagent-focus`** to open the same picker.
-- Run **`/subagent-focus <name>`** to switch directly. Tab completion offers running agent names; names containing spaces work without quotes.
+- Run **`/subagent-focus <name>`** to switch directly. After `/subagent-focus `, press **Tab** repeatedly to cycle through running agent names, wrapping back to the first; press **Enter** to focus the selected agent. Type a prefix to cycle only matching names. Editing resets the cycle, and names containing spaces work without quotes.
 
 These controls work in both regular and fullscreen interactive Pi mode, without mouse capture. If an agent finishes or its pane closes before selection, Pi shows a notification instead of focusing another pane. Completed agents are not reopened. Use tmux's last-window binding (normally **Ctrl+B, L**) to return to the main session.
 

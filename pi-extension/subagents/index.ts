@@ -14,6 +14,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { createFocusCompletionHandler } from "./focus-completion.ts";
 import {
   isMuxAvailable,
   muxSetupHint,
@@ -1678,9 +1679,24 @@ async function watchSubagent(
 
 export default function subagentsExtension(pi: ExtensionAPI) {
   latestPi = pi;
+  let unsubscribeFocusCompletion: (() => void) | undefined;
+  let promptOpen = false;
+  pi.on("ui_prompt_start", () => { promptOpen = true; });
+  pi.on("ui_prompt_end", () => { promptOpen = false; });
+
   // Capture the UI context for widget updates
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
+    unsubscribeFocusCompletion?.();
+    unsubscribeFocusCompletion = undefined;
+    promptOpen = false;
+    if ((ctx as ExtensionContext & { mode?: string }).mode === "tui") {
+      unsubscribeFocusCompletion = ctx.ui.onTerminalInput(createFocusCompletionHandler(
+        ctx.ui,
+        () => Array.from(runningSubagents.values(), (agent) => agent.name),
+        () => promptOpen,
+      ));
+    }
     // pi runs multiple sessions in one process. A prior session's shutdown
     // aborts the shared module poll-abort controller; install a fresh one so
     // subagents spawned in this session aren't watched against a dead signal.
@@ -1693,6 +1709,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
   // Clean up on session shutdown
   pi.on("session_shutdown", (_event, _ctx) => {
+    unsubscribeFocusCompletion?.();
+    unsubscribeFocusCompletion = undefined;
+    promptOpen = false;
     if (widgetInterval) {
       clearInterval(widgetInterval);
       widgetInterval = null;
