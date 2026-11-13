@@ -207,6 +207,25 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
 }
 
 /**
+ * Focus a subagent's window and pane. Resolve the target before changing focus
+ * so a closed pane cannot fall back to the caller's current window.
+ */
+export function focusSurface(surface: string): void {
+  requireTmux();
+  const window = execFileSync(
+    "tmux",
+    ["display-message", "-p", "-t", surface, "#{session_id}:#{window_id}"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
+  // Queue both nonblocking commands in one tmux request. Separate processes
+  // leave a gap where the pane can exit and the cached window can select a
+  // surviving sibling instead. A failed select-pane stops this command queue.
+  execFileSync("tmux", ["select-pane", "-t", surface, ";", "select-window", "-t", window], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+/**
  * Close a pane.
  */
 export function closeSurface(surface: string): void {

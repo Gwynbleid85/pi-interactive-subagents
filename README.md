@@ -19,6 +19,14 @@ Spawn several in parallel — they run concurrently and steer results back indep
 
 Each sub-agent window starts with one pane. Switch to its window to inspect or interact with it; automatic cleanup closes that pane (and its window if it is the last pane). The extension does not rebalance the parent window on spawn or exit.
 
+### Open a running subagent
+
+- Press **Ctrl+Alt+S** to choose a running subagent with ↑/↓, then **Enter** to switch to its tmux window and pane. **Escape** cancels.
+- Run **`/subagent-focus`** to open the same picker.
+- Run **`/subagent-focus <name>`** to switch directly. Tab completion offers running agent names; names containing spaces work without quotes.
+
+These controls work in both regular and fullscreen interactive Pi mode, without mouse capture. If an agent finishes or its pane closes before selection, Pi shows a notification instead of focusing another pane. Completed agents are not reopened. Use tmux's last-window binding (normally **Ctrl+B, L**) to return to the main session.
+
 If your shell startup is slow and launch commands get dropped before the prompt is ready, raise the delay:
 
 ```bash

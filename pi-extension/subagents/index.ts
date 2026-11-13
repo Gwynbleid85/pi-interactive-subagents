@@ -22,6 +22,7 @@ import {
   sendLongCommand,
   pollForExit,
   closeSurface,
+  focusSurface,
   shellEscape,
   readScreen,
 } from "./tmux.ts";
@@ -742,8 +743,43 @@ function renderSubagentWidgetLines(agents: RunningSubagent[], width: number): st
     lines.push(borderLine(left, right, width));
   }
 
+  lines.push(borderLine(" Ctrl+Alt+S · /subagent-focus to open ", "", width));
   lines.push(borderBottom(width));
   return lines;
+}
+
+async function focusSubagent(args: string, ctx: ExtensionContext): Promise<void> {
+  if (!ctx.hasUI || ("mode" in ctx && ctx.mode !== "tui")) {
+    ctx.ui.notify("Subagent focus requires interactive terminal mode.", "warning");
+    return;
+  }
+
+  const agents = Array.from(runningSubagents.values());
+  if (agents.length === 0) {
+    ctx.ui.notify("No running subagents to focus.", "info");
+    return;
+  }
+
+  let name = args.trim();
+  if (!name) {
+    const selected = await ctx.ui.select("Focus subagent", agents.map((agent) => agent.name));
+    if (selected === undefined) return;
+    name = selected;
+  }
+
+  const agent = agents.find((candidate) => candidate.name === name);
+  // Check the captured identity, not just its name: a finished agent's name
+  // may have been reused while the picker was open.
+  if (!agent || runningSubagents.get(agent.id) !== agent) {
+    ctx.ui.notify(`Subagent "${name}" is no longer running or was not found.`, "warning");
+    return;
+  }
+
+  try {
+    focusSurface(agent.surface);
+  } catch {
+    ctx.ui.notify(`Could not focus subagent "${name}". Its tmux pane may have closed.`, "error");
+  }
 }
 
 function updateWidget() {
@@ -2318,6 +2354,22 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         };
       },
     });
+
+  pi.registerShortcut("ctrl+alt+s", {
+    description: "Focus a running subagent's tmux window",
+    handler: async (ctx) => focusSubagent("", ctx),
+  });
+
+  pi.registerCommand("subagent-focus", {
+    description: "Focus a running subagent: /subagent-focus [name]",
+    getArgumentCompletions: (prefix) => {
+      const matches = Array.from(runningSubagents.values())
+        .filter((agent) => agent.name.startsWith(prefix))
+        .map((agent) => ({ value: agent.name, label: agent.name }));
+      return matches.length > 0 ? matches : null;
+    },
+    handler: async (args, ctx) => focusSubagent(args, ctx),
+  });
 
   // /subagent command — spawn a subagent by name
   pi.registerCommand("subagent", {

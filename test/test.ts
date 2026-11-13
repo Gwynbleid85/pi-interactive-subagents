@@ -2531,7 +2531,7 @@ describe("subagents widget rendering", () => {
 
       assert.deepEqual(
         lines.map((line: string) => visibleWidth(line)),
-        [16, 16, 16, 16, 16],
+        [16, 16, 16, 16, 16, 16],
       );
     } finally {
       Date.now = originalNow;
