@@ -6,7 +6,7 @@ Async subagents for [pi](https://github.com/badlogic/pi-mono), running in tmux p
 
 ## How it works
 
-`subagent()` returns immediately. The sub-agent runs in its own tmux pane — a right split off the parent pi pane, so pane creation never steals keyboard focus. A live widget above the input tracks every running sub-agent, and when one finishes, its result is steered into the main session as a notification that triggers a new turn.
+`subagent()` returns immediately. The sub-agent runs in its own named background tmux window in the parent pi session. Creating a sub-agent never switches your active window or changes your current pane layout. A live widget above the input tracks every running sub-agent, and when one finishes, its result is steered into the main session as a notification that triggers a new turn.
 
 ```
 ╭─ Subagents ──────────────────────────── 2 running ─╮
@@ -17,7 +17,7 @@ Async subagents for [pi](https://github.com/badlogic/pi-mono), running in tmux p
 
 Spawn several in parallel — they run concurrently and steer results back independently as each finishes.
 
-Panes are kept evenly sized: the extension re-applies an `even-horizontal` layout after every spawn and exit (debounced). The layout is a single constant, `SUBAGENT_TMUX_LAYOUT` in `pi-extension/subagents/tmux.ts` — change it to any named tmux layout (`main-vertical`, `tiled`, …).
+Each sub-agent window starts with one pane. Switch to its window to inspect or interact with it; automatic cleanup closes that pane (and its window if it is the last pane). The extension does not rebalance the parent window on spawn or exit.
 
 If your shell startup is slow and launch commands get dropped before the prompt is ready, raise the delay:
 

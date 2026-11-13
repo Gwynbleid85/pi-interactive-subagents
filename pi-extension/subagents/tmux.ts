@@ -2,13 +2,13 @@
  * tmux surface layer — the only terminal multiplexer this extension supports.
  *
  * Everything the extension does to a pane goes through the small API in this
- * file: create/split a pane, type a command into it, read its screen, close
+ * file: create a background window or split, type a command into it, read its screen, close
  * it, and poll for exit. Keeping the tmux calls isolated here means index.ts
  * stays testable without a multiplexer running.
  *
- * Panes are identified by tmux pane ids (e.g. `%12`). Splits always target
- * the parent pi's pane (`$TMUX_PANE`) so they follow the agent rather than
- * the user's focus.
+ * Panes are identified by tmux pane ids (e.g. `%12`). Subagent windows target
+ * the parent pi's session via `$TMUX_PANE`, without changing keyboard focus
+ * or the parent window's layout.
  */
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
@@ -67,55 +67,33 @@ export function shellEscape(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
-// ── Pane layout ──
-
-/**
- * tmux layout applied to the subagent window to keep panes evenly sized.
- * Switchable: "even-horizontal" (equal columns, matches Ctrl+b Alt+1),
- * "main-vertical" (big main pane + tiled column), "tiled" (grid).
- */
-const SUBAGENT_TMUX_LAYOUT = "even-horizontal";
-
-let rebalanceTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * Re-balance subagent panes so repeated splits don't leave them lopsided.
- * tmux halves the target pane on every split and dumps freed space onto a
- * neighbor on close, so without this panes drift to wildly uneven widths.
- * Applies SUBAGENT_TMUX_LAYOUT to the parent pi window. Debounced so a burst
- * of parallel spawns or staggered exits collapses into a single layout call,
- * and non-fatal: a cosmetic resize must never break spawning or watching.
- */
-function rebalanceSurfaces(hintPane?: string): void {
-  // Prefer the parent pi pane (stable; survives a closing subagent pane).
-  const target = process.env.TMUX_PANE ?? hintPane;
-  if (!target) return;
-  if (rebalanceTimer) clearTimeout(rebalanceTimer);
-  rebalanceTimer = setTimeout(() => {
-    rebalanceTimer = null;
-    try {
-      // -t <pane> resolves to that pane's window; does not change focus.
-      execFileSync("tmux", ["select-layout", "-t", target, SUBAGENT_TMUX_LAYOUT], {
-        encoding: "utf8",
-      });
-    } catch {
-      // Pane/window may be gone; balancing is best-effort.
-    }
-  }, 120);
-}
-
 // ── Surface primitives ──
 
 /**
- * Create a new pane for a subagent: a right split off the parent pi's pane,
- * so new panes follow the agent rather than the user's focus.
- * See https://github.com/HazAT/pi-interactive-subagents/issues/12
- *
- * Returns the new pane id (e.g. `%12`).
+ * Create an unfocused, named window in the parent pi's session.
+ * Returns its initial pane id (e.g. `%12`) for communication and cleanup.
  */
 export function createSurface(name: string): string {
-  void name; // tmux panes are not named; the pi process inside shows its own title.
-  return createSurfaceSplit(name, "right", process.env.TMUX_PANE);
+  requireTmux();
+
+  const args = ["new-window", "-d", "-n", name];
+  if (process.env.TMUX_PANE) {
+    const session = execFileSync(
+      "tmux",
+      ["display-message", "-p", "-t", process.env.TMUX_PANE, "#{session_id}"],
+      { encoding: "utf8" },
+    ).trim();
+    // new-window requires a window target, not a pane ID. An empty window
+    // index allocates the next available slot in the parent's session.
+    args.push("-t", `${session}:`);
+  }
+  args.push("-P", "-F", "#{pane_id}");
+
+  const pane = execFileSync("tmux", args, { encoding: "utf8" }).trim();
+  if (!pane.startsWith("%")) {
+    throw new Error(`Unexpected tmux new-window output: ${pane}`);
+  }
+  return pane;
 }
 
 /**
@@ -149,7 +127,6 @@ export function createSurfaceSplit(
     throw new Error(`Unexpected tmux split-window output: ${pane}`);
   }
 
-  rebalanceSurfaces(pane);
   return pane;
 }
 
@@ -235,7 +212,6 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
 export function closeSurface(surface: string): void {
   requireTmux();
   execFileSync("tmux", ["kill-pane", "-t", surface], { encoding: "utf8" });
-  rebalanceSurfaces();
 }
 
 // ── Exit polling ──
