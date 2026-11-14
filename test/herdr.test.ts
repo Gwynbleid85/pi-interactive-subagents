@@ -8,6 +8,7 @@ import { join } from "node:path";
 // replaces the Herdr server/CLI, which must not control a developer's session.
 import * as adapter from "../pi-extension/subagents/herdr.ts";
 import * as surfaces from "../pi-extension/subagents/tmux.ts";
+import { getAvailableBackends } from "./integration/harness.ts";
 
 const pane = (pane_id = "w7:p1", tab_id = "w7:t1") => ({
   pane_id, terminal_id: "terminal-test", workspace_id: "w7", tab_id,
@@ -143,6 +144,10 @@ else { console.log(JSON.stringify({id:'test',result:{type:'ok'}})); }
     assert.throws(() => adapter.focusHerdrSurface("herdr:w7:p9"), /Herdr.*agent focus.*server unavailable/s);
     await assert.rejects(adapter.readHerdrScreenAsync("herdr:w7:p9", 5), /Herdr.*pane read.*server unavailable/s);
     assert.equal(calls().filter((args) => args[1] === "run").length, 1);
+  });
+
+  it("does not run tmux-only integration tests against native Herdr tabs", () => {
+    assert.deepEqual(getAvailableBackends(), []);
   });
 
   it("selects Herdr for spawning with or without tmux present", () => {

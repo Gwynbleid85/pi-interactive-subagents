@@ -23,7 +23,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import {
-  isMuxAvailable,
+  isTmuxAvailable,
   createSurface,
   createSurfaceSplit,
   sendCommand,
@@ -80,7 +80,9 @@ export const PI_TIMEOUT = Number(process.env.PI_TEST_TIMEOUT ?? "120000");
  * Returns ["tmux"] or [].
  */
 export function getAvailableBackends(): string[] {
-  return isMuxAvailable() ? ["tmux"] : [];
+  // This harness has tmux-specific split/focus operations. Native Herdr has
+  // its own opt-in smoke test and must not run through this harness.
+  return process.env.HERDR_ENV !== "1" && isTmuxAvailable() ? ["tmux"] : [];
 }
 
 export function focusSurface(surface: string): void {

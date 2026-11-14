@@ -82,4 +82,19 @@
 - [ ] **Step 4: Obtain an independent whole-change review.** Address concrete correctness issues with regression tests, then rerun affected checks. Commit documentation/verification changes; report changed paths, verified behavior, and any remaining live-Herdr limitation.
 
 ## Execution notes
-Implementation has not started. The installed extension checkout was clean before these planning documents were created. Execution should use an isolated worktree; activation into the installed checkout must preserve any user changes and happen only after verification. Do not push remote changes.
+Implemented in the approved `.worktrees/herdr-support` worktree. The user authorized fast-forwarding the original checkout's main branch and pushing to `Gwynbleid85/pi-interactive-subagents` after verification and review. Preserve any user changes and do not force-push.
+
+### Verification before independent review
+- `npm test`: 191 pass, 1 pre-existing failure (`getToolExtensionPath maps custom tools and skips built-ins`, absent `web_search` extension). User explicitly approved proceeding with this baseline exception.
+- `node --test test/system-prompt-mode.test.ts`: passes.
+- Installed Herdr 0.9.5 CLI contract test against an isolated socket: passes.
+- Real tmux surface integration: 7 tests pass; no model calls.
+- Native Herdr smoke test: provided, skipped outside a managed Herdr terminal.
+- Full model-backed integration: attempted via `npm run test:integration -- --test-skip-pattern=subagent-lifecycle`, but the appended Node option did not skip the model suite; execution timed out after 90 seconds. The single created test window was closed explicitly. Rerunning with Node options before file paths passed the surface suite and excluded model lifecycle tests. Real-model lifecycle is not verified.
+- `git diff --check`: clean.
+
+### Implementation rulings
+- Use `agent focus <pane-id>` rather than pane lookup plus tab focus: Herdr validates and focuses the exact live child atomically, avoiding a sibling focus race. Startup focus can fail until Herdr detects the child.
+- `pane run` is quiet on success; the original 0.9.5 parser treats a literal `--` separator as command text, so pass the command as one argument without a separator.
+- Keep the existing integration harness tmux-only and give Herdr its own opt-in smoke test; otherwise generic availability would incorrectly run tmux-specific operations against Herdr tabs.
+- Reuse installed dependencies without adding runtime packages. The baseline exception remains explicit rather than modifying unrelated extension discovery.
