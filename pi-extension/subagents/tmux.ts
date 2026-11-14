@@ -1,12 +1,15 @@
 /**
- * tmux surface layer — the only terminal multiplexer this extension supports.
+ * Terminal surface facade for tmux windows and native Herdr tabs.
+ * The historical filename is retained for compatibility with existing imports.
  *
  * Everything the extension does to a pane goes through the small API in this
  * file: create a background window or split, type a command into it, read its screen, close
  * it, and poll for exit. Keeping the tmux calls isolated here means index.ts
  * stays testable without a multiplexer running.
  *
- * Panes are identified by tmux pane ids (e.g. `%12`). Subagent windows target
+ * Herdr surfaces use `herdr:<pane-id>`; tmux uses pane ids (e.g. `%12`).
+ * Backend routing follows the handle, not whichever terminal is now preferred.
+ * Subagent tmux windows target
  * the parent pi's session via `$TMUX_PANE`, without changing keyboard focus
  * or the parent window's layout.
  */
@@ -15,6 +18,11 @@ import { promisify } from "node:util";
 import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+
+import {
+  isHerdrAvailable, createHerdrSurface, sendHerdrCommand,
+  readHerdrScreen, readHerdrScreenAsync, focusHerdrSurface, closeHerdrSurface,
+} from "./herdr.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,11 +56,12 @@ export function isTmuxAvailable(): boolean {
 }
 
 export function isMuxAvailable(): boolean {
-  return isTmuxAvailable();
+  // Broken Herdr context must not silently create terminals in inherited tmux.
+  return process.env.HERDR_ENV === "1" ? isHerdrAvailable() : isTmuxAvailable();
 }
 
 export function muxSetupHint(): string {
-  return "Start pi inside tmux (`tmux new -A -s pi 'pi'`).";
+  return "Start pi inside Herdr (0.9.5+ with its CLI and socket available) or tmux (`tmux new -A -s pi 'pi'`).";
 }
 
 function requireTmux(): void {
@@ -74,6 +83,7 @@ export function shellEscape(s: string): string {
  * Returns its initial pane id (e.g. `%12`) for communication and cleanup.
  */
 export function createSurface(name: string): string {
+  if (process.env.HERDR_ENV === "1") return createHerdrSurface(name);
   requireTmux();
 
   const args = ["new-window", "-d", "-n", name];
@@ -136,6 +146,7 @@ export function createSurfaceSplit(
  * then submitted with Enter.
  */
 export function sendCommand(surface: string, command: string): void {
+  if (surface.startsWith("herdr:")) return sendHerdrCommand(surface, command);
   requireTmux();
   execFileSync("tmux", ["send-keys", "-t", surface, "-l", command], { encoding: "utf8" });
   execFileSync("tmux", ["send-keys", "-t", surface, "Enter"], { encoding: "utf8" });
@@ -183,6 +194,7 @@ export function sendLongCommand(
  * Read the screen contents of a pane (sync).
  */
 export function readScreen(surface: string, lines = 50): string {
+  if (surface.startsWith("herdr:")) return readHerdrScreen(surface, lines);
   requireTmux();
   return execFileSync(
     "tmux",
@@ -197,6 +209,7 @@ export function readScreen(surface: string, lines = 50): string {
  * Read the screen contents of a pane (async).
  */
 export async function readScreenAsync(surface: string, lines = 50): Promise<string> {
+  if (surface.startsWith("herdr:")) return readHerdrScreenAsync(surface, lines);
   requireTmux();
   const { stdout } = await execFileAsync(
     "tmux",
@@ -211,6 +224,7 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
  * so a closed pane cannot fall back to the caller's current window.
  */
 export function focusSurface(surface: string): void {
+  if (surface.startsWith("herdr:")) return focusHerdrSurface(surface);
   requireTmux();
   const window = execFileSync(
     "tmux",
@@ -229,6 +243,7 @@ export function focusSurface(surface: string): void {
  * Close a pane.
  */
 export function closeSurface(surface: string): void {
+  if (surface.startsWith("herdr:")) return closeHerdrSurface(surface);
   requireTmux();
   execFileSync("tmux", ["kill-pane", "-t", surface], { encoding: "utf8" });
 }

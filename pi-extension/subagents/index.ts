@@ -510,10 +510,10 @@ function muxUnavailableResult() {
     content: [
       {
         type: "text" as const,
-        text: `Subagents require tmux. ${muxSetupHint()}`,
+        text: `Subagents require Herdr or tmux. ${muxSetupHint()}`,
       },
     ],
-    details: { error: "tmux not available" },
+    details: { error: "terminal backend not available" },
   };
 }
 
@@ -779,7 +779,7 @@ async function focusSubagent(args: string, ctx: ExtensionContext): Promise<void>
   try {
     focusSurface(agent.surface);
   } catch {
-    ctx.ui.notify(`Could not focus subagent "${name}". Its tmux pane may have closed.`, "error");
+    ctx.ui.notify(`Could not focus subagent "${name}". Its terminal pane may have closed, or the agent may not be detected yet.`, "error");
   }
 }
 
@@ -1045,7 +1045,7 @@ function steerSubagent(
   } catch (error: any) {
     return {
       error:
-        `Failed to deliver message to subagent "${running.name}" via tmux: ` +
+        `Failed to deliver message to subagent "${running.name}" via its terminal: ` +
         `${error?.message ?? String(error)}`,
     };
   }
@@ -2375,7 +2375,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     });
 
   pi.registerShortcut("ctrl+alt+s", {
-    description: "Focus a running subagent's tmux window",
+    description: "Focus a running subagent's terminal",
     handler: async (ctx) => focusSubagent("", ctx),
   });
 

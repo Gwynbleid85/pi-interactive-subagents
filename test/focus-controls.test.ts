@@ -178,6 +178,7 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
   let socket: string;
   let previousTmux: string | undefined;
   let previousPane: string | undefined;
+  let previousHerdr: string | undefined;
   let parent: string;
   let child: string;
   let parentWindow: string;
@@ -207,6 +208,8 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
     socket = join(dir, "tmux.sock");
     previousTmux = process.env.TMUX;
     previousPane = process.env.TMUX_PANE;
+    previousHerdr = process.env.HERDR_ENV;
+    delete process.env.HERDR_ENV;
     parent = tmux("-f", "/dev/null", "new-session", "-d", "-s", "parent", "-x", "160", "-y", "40", "-P", "-F", "#{pane_id}", "sleep 300");
     process.env.TMUX = tmux("display-message", "-p", "-t", parent, "#{socket_path},#{pid},0");
     process.env.TMUX_PANE = parent;
@@ -231,6 +234,7 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
     __test__.runningSubagents.clear();
     if (previousTmux === undefined) delete process.env.TMUX; else process.env.TMUX = previousTmux;
     if (previousPane === undefined) delete process.env.TMUX_PANE; else process.env.TMUX_PANE = previousPane;
+    if (previousHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = previousHerdr;
     try { tmux("kill-server"); } catch {}
     rmSync(dir, { recursive: true, force: true });
   });
@@ -240,6 +244,7 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
     const layout = tmux("display-message", "-p", "-t", parent, "#{window_layout}");
     const sibling = tmux("split-window", "-h", "-t", child, "-P", "-F", "#{pane_id}", "sleep 300");
     assert.notEqual(sibling, child);
+    process.env.HERDR_ENV = "1"; // routing must follow the existing tmux handle
     (surfaces as any).focusSurface(child);
     assert.equal(activeWindow(), tmux("display-message", "-p", "-t", child, "#{window_id}"));
     assert.equal(tmux("display-message", "-p", "-t", child, "#{pane_active}"), "1");

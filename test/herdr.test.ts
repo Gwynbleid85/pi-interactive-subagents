@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 // Exercise the real adapter at the external process boundary. The fake only
 // replaces the Herdr server/CLI, which must not control a developer's session.
-const adapter = await import("../pi-extension/subagents/herdr.ts").catch(() => ({} as any));
+import * as adapter from "../pi-extension/subagents/herdr.ts";
+import * as surfaces from "../pi-extension/subagents/tmux.ts";
 
 const pane = (pane_id = "w7:p1", tab_id = "w7:t1") => ({
   pane_id, terminal_id: "terminal-test", workspace_id: "w7", tab_id,
@@ -142,6 +143,62 @@ else { console.log(JSON.stringify({id:'test',result:{type:'ok'}})); }
     assert.throws(() => adapter.focusHerdrSurface("herdr:w7:p9"), /Herdr.*agent focus.*server unavailable/s);
     await assert.rejects(adapter.readHerdrScreenAsync("herdr:w7:p9", 5), /Herdr.*pane read.*server unavailable/s);
     assert.equal(calls().filter((args) => args[1] === "run").length, 1);
+  });
+
+  it("selects Herdr for spawning with or without tmux present", () => {
+    delete process.env.TMUX;
+    assert.equal(surfaces.isMuxAvailable(), true);
+    assert.equal(surfaces.createSurface("first"), "herdr:w7:p9");
+    process.env.TMUX = "inherited-tmux";
+    assert.equal(surfaces.createSurface("second"), "herdr:w7:p9");
+    assert.equal(calls().filter((args) => args[0] === "tab" && args[1] === "create").length, 2);
+  });
+
+  it("does not fall back to tmux when Herdr context or CLI is broken", () => {
+    process.env.TMUX = "inherited-tmux";
+    delete process.env.HERDR_SOCKET_PATH;
+    assert.equal(surfaces.isMuxAvailable(), false);
+    assert.throws(() => surfaces.createSurface("worker"), /Herdr/);
+    assert.deepEqual(calls(), []);
+  });
+
+  it("routes existing Herdr handles independently of current spawn context", async () => {
+    delete process.env.HERDR_ENV;
+    surfaces.sendCommand("herdr:w7:p9", "follow up");
+    assert.equal(surfaces.readScreen("herdr:w7:p9", 5), "answer\n__SUBAGENT_DONE_0__\n");
+    assert.equal(await surfaces.readScreenAsync("herdr:w7:p9", 8), "answer\n__SUBAGENT_DONE_0__\n");
+    surfaces.focusSurface("herdr:w7:p9");
+    surfaces.closeSurface("herdr:w7:p9");
+    assert.deepEqual(calls().map((args) => args.slice(0, 3)), [
+      ["pane", "run", "w7:p9"], ["pane", "read", "w7:p9"], ["pane", "read", "w7:p9"],
+      ["agent", "focus", "w7:p9"], ["pane", "close", "w7:p9"],
+    ]);
+  });
+
+  it("preserves sandboxed script contents when submitting through Herdr", () => {
+    const script = join(dir, "child 'script.sh");
+    const command = "pi --no-extensions --tools 'read' -e '/safe/extension.ts'";
+    assert.equal(surfaces.sendLongCommand("herdr:w7:p9", command, { scriptPath: script }), script);
+    assert.equal(readFileSync(script, "utf8"), "#!/bin/bash\n" + command + "\n");
+    assert.deepEqual(calls(), [["pane", "run", "w7:p9", "bash '" + script.replace(/'/g, "'\\''") + "'"]]);
+  });
+
+  it("recognizes clean and failed terminal sentinels through Herdr", async () => {
+    const signal = AbortSignal.timeout(2000);
+    assert.deepEqual(await surfaces.pollForExit("herdr:w7:p9", signal, { interval: 1 }), { reason: "sentinel", exitCode: 0 });
+    response("__SUBAGENT_DONE_23__");
+    assert.deepEqual(await surfaces.pollForExit("herdr:w7:p9", signal, { interval: 1 }), { reason: "sentinel", exitCode: 23 });
+  });
+
+  it("preserves error sidecars and aborts without reading the terminal", async () => {
+    const sessionFile = join(dir, "session.jsonl");
+    writeFileSync(sessionFile + ".exit", JSON.stringify({ type: "error", errorMessage: "provider failed" }));
+    assert.deepEqual(await surfaces.pollForExit("herdr:w7:p9", new AbortController().signal, { interval: 1, sessionFile }), {
+      reason: "error", exitCode: 1, errorMessage: "provider failed",
+    });
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(surfaces.pollForExit("herdr:w7:p9", controller.signal, { interval: 1 }), /Aborted/);
+    assert.deepEqual(calls(), []);
   });
 
   it("bounds a stalled CLI command", () => {

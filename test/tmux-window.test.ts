@@ -20,6 +20,8 @@ it("creates unfocused named windows in the parent's session without changing its
   const socket = join(dir, "tmux.sock");
   const previousTmux = process.env.TMUX;
   const previousPane = process.env.TMUX_PANE;
+  const previousHerdr = process.env.HERDR_ENV;
+  delete process.env.HERDR_ENV;
   const tmux = (...args: string[]) => execFileSync("tmux", ["-S", socket, ...args], {
     encoding: "utf8",
   }).trim();
@@ -48,6 +50,8 @@ it("creates unfocused named windows in the parent's session without changing its
     await new Promise((resolve) => setTimeout(resolve, 250));
     assert.equal(tmux("display-message", "-p", "-t", parent, "#{window_layout}"), layout);
 
+    // Existing tmux handles must not switch backend when Herdr is preferred.
+    process.env.HERDR_ENV = "1";
     closeSurface(first);
     await new Promise((resolve) => setTimeout(resolve, 250));
     assert.equal(tmux("display-message", "-p", "-t", parent, "#{window_layout}"), layout);
@@ -56,6 +60,8 @@ it("creates unfocused named windows in the parent's session without changing its
     closeSurface(second);
     assert.equal(tmux("list-windows", "-t", "parent", "-F", "#{window_id}"), parentWindow);
   } finally {
+    if (previousHerdr === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = previousHerdr;
     if (previousTmux === undefined) delete process.env.TMUX;
     else process.env.TMUX = previousTmux;
     if (previousPane === undefined) delete process.env.TMUX_PANE;
