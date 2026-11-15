@@ -23,6 +23,7 @@ import {
   sendLongCommand,
   pollForExit,
   closeSurface,
+  failSurfaceStartup,
   focusSurface,
   shellEscape,
   readScreen,
@@ -510,7 +511,7 @@ function muxUnavailableResult() {
     content: [
       {
         type: "text" as const,
-        text: `Subagents require Herdr or tmux. ${muxSetupHint()}`,
+        text: `Subagents require Herdr Core, legacy Herdr, or tmux. ${muxSetupHint()}`,
       },
     ],
     details: { error: "terminal backend not available" },
@@ -1245,6 +1246,7 @@ async function launchSubagent(
   // For new surfaces, pause briefly so the shell is ready before sending the command.
   const surfacePreCreated = !!options?.surface;
   const surface = options?.surface ?? createSurface(params.name);
+  try {
   if (!surfacePreCreated) {
     await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
   }
@@ -1491,6 +1493,10 @@ async function launchSubagent(
 
   runningSubagents.set(id, running);
   return running;
+  } catch (error) {
+    runningSubagents.delete(id);
+    failSurfaceStartup(surface, error);
+  }
 }
 
 /**
@@ -1749,14 +1755,14 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "subagent",
       label: "Subagent",
       description:
-        "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
+        "Spawn a sub-agent in a dedicated Herdr Core terminal, legacy Herdr tab, or tmux window. " +
         "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
         "When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
         "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
         "DO NOT fabricate, assume, or summarize results after calling this tool. " +
         "After spawning, either end your turn immediately, or work on other independent tasks (including spawning more subagents in parallel). The harness will wake you with the result when it is ready.",
       promptSnippet:
-        "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
+        "Spawn a sub-agent in a dedicated Herdr Core terminal, legacy Herdr tab, or tmux window. " +
         "This is a fire-and-forget async tool: the call returns immediately with only an acknowledgement. " +
         "When the sub-agent finishes, the harness AUTOMATICALLY delivers its result as a steer message that wakes you up and starts a new turn — you do not need to do anything to receive it. " +
         "DO NOT write polling loops, sleep/wait commands, tail/watch scripts, or repeatedly read session/log files to detect completion. DO NOT call subagents_list or any other tool to 'check' status. All of that is wasted work — the harness handles delivery for you. " +
@@ -2215,6 +2221,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         const entryCountBefore = countSessionEntryLines(sessionPath);
 
         const surface = createSurface(name);
+        try {
         await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
 
         // Build pi resume command
@@ -2382,6 +2389,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             status: "started",
           },
         };
+        } catch (error) {
+          runningSubagents.delete(id);
+          failSurfaceStartup(surface, error);
+        }
       },
     });
 

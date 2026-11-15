@@ -1,5 +1,5 @@
 /**
- * Terminal surface facade for tmux windows and native Herdr tabs.
+ * Terminal surface facade for tmux, legacy Herdr tabs and Herdr Core children.
  * The historical filename is retained for compatibility with existing imports.
  *
  * Everything the extension does to a pane goes through the small API in this
@@ -7,7 +7,8 @@
  * it, and poll for exit. Keeping the tmux calls isolated here means index.ts
  * stays testable without a multiplexer running.
  *
- * Herdr surfaces use `herdr:<pane-id>`; tmux uses pane ids (e.g. `%12`).
+ * Core uses `hc:<terminal-id>`, legacy Herdr uses `herdr:<pane-id>`;
+ * tmux uses pane ids (e.g. `%12`).
  * Backend routing follows the handle, not whichever terminal is now preferred.
  * Subagent tmux windows target
  * the parent pi's session via `$TMUX_PANE`, without changing keyboard focus
@@ -23,6 +24,12 @@ import {
   isHerdrAvailable, createHerdrSurface, sendHerdrCommand,
   readHerdrScreen, readHerdrScreenAsync, focusHerdrSurface, closeHerdrSurface,
 } from "./herdr.ts";
+
+import {
+  hasHerdrCoreContext, isHerdrCoreAvailable, createHerdrCoreSurface,
+  sendHerdrCoreCommand, readHerdrCoreScreen, readHerdrCoreScreenAsync,
+  focusHerdrCoreSurface, closeHerdrCoreSurface,
+} from "./herdr-core.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,12 +63,13 @@ export function isTmuxAvailable(): boolean {
 }
 
 export function isMuxAvailable(): boolean {
-  // Broken Herdr context must not silently create terminals in inherited tmux.
+  // A broken managed context must not launch into a different session.
+  if (hasHerdrCoreContext()) return isHerdrCoreAvailable();
   return process.env.HERDR_ENV === "1" ? isHerdrAvailable() : isTmuxAvailable();
 }
 
 export function muxSetupHint(): string {
-  return "Start pi inside Herdr (0.9.5+ with its CLI and socket available) or tmux (`tmux new -A -s pi 'pi'`).";
+  return "Start pi inside Herdr Core (HC_TERMINAL_ID and HC_TERMINAL_SOCKET), legacy Herdr (0.9.5+ with its CLI and socket), or tmux (`tmux new -A -s pi 'pi'`).";
 }
 
 function requireTmux(): void {
@@ -83,6 +91,7 @@ export function shellEscape(s: string): string {
  * Returns its initial pane id (e.g. `%12`) for communication and cleanup.
  */
 export function createSurface(name: string): string {
+  if (hasHerdrCoreContext()) return createHerdrCoreSurface(name);
   if (process.env.HERDR_ENV === "1") return createHerdrSurface(name);
   requireTmux();
 
@@ -146,6 +155,7 @@ export function createSurfaceSplit(
  * then submitted with Enter.
  */
 export function sendCommand(surface: string, command: string): void {
+  if (surface.startsWith("hc:")) return sendHerdrCoreCommand(surface, command);
   if (surface.startsWith("herdr:")) return sendHerdrCommand(surface, command);
   requireTmux();
   execFileSync("tmux", ["send-keys", "-t", surface, "-l", command], { encoding: "utf8" });
@@ -197,6 +207,7 @@ export function sendLongCommand(
  * Read the screen contents of a pane (sync).
  */
 export function readScreen(surface: string, lines = 50): string {
+  if (surface.startsWith("hc:")) return readHerdrCoreScreen(surface, lines);
   if (surface.startsWith("herdr:")) return readHerdrScreen(surface, lines);
   requireTmux();
   return execFileSync(
@@ -212,6 +223,7 @@ export function readScreen(surface: string, lines = 50): string {
  * Read the screen contents of a pane (async).
  */
 export async function readScreenAsync(surface: string, lines = 50): Promise<string> {
+  if (surface.startsWith("hc:")) return readHerdrCoreScreenAsync(surface, lines);
   if (surface.startsWith("herdr:")) return readHerdrScreenAsync(surface, lines);
   requireTmux();
   const { stdout } = await execFileAsync(
@@ -227,6 +239,7 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
  * so a closed pane cannot fall back to the caller's current window.
  */
 export function focusSurface(surface: string): void {
+  if (surface.startsWith("hc:")) return focusHerdrCoreSurface(surface);
   if (surface.startsWith("herdr:")) return focusHerdrSurface(surface);
   requireTmux();
   const window = execFileSync(
@@ -246,9 +259,29 @@ export function focusSurface(surface: string): void {
  * Close a pane.
  */
 export function closeSurface(surface: string): void {
+  if (surface.startsWith("hc:")) return closeHerdrCoreSurface(surface);
   if (surface.startsWith("herdr:")) return closeHerdrSurface(surface);
   requireTmux();
   execFileSync("tmux", ["kill-pane", "-t", surface], { encoding: "utf8" });
+}
+
+/** Release a terminal whose launch never handed ownership to its watcher.
+ * Never retry a send: an ambiguous delivery is cleaned up, not resubmitted.
+ * Keep the launch error primary, but surface any failed cleanup as well.
+ */
+export function failSurfaceStartup(surface: string, error: unknown): never {
+  try {
+    closeSurface(surface);
+  } catch (cleanupError) {
+    const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    const failure = new Error(
+      `${error instanceof Error ? error.message : String(error)}\nTerminal cleanup failed: ${detail}`,
+      { cause: error },
+    );
+    Object.assign(failure, { cleanupError: detail });
+    throw failure;
+  }
+  throw error;
 }
 
 // ── Exit polling ──

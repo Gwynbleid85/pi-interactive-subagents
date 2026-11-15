@@ -1,12 +1,12 @@
 # pi-interactive-subagents
 
-Async subagents for [pi](https://github.com/badlogic/pi-mono), running in native [Herdr](https://github.com/herdrdev/herdr) tabs or tmux windows. Spawn a sub-agent, keep working in the main session, and get the result steered back when it finishes. Fully non-blocking.
+Async subagents for [pi](https://github.com/badlogic/pi-mono), running in native [Herdr Core](https://github.com/herdrdev/herdr-core) child terminals, legacy [Herdr](https://github.com/herdrdev/herdr) tabs, or tmux windows. Spawn a sub-agent, keep working in the main session, and get the result steered back when it finishes. Fully non-blocking.
 
-**Herdr + tmux fork.** See [Acknowledgements](#acknowledgements) for the upstream project, which also supports cmux, zellij, and WezTerm.
+**Herdr Core + legacy Herdr + tmux fork.** See [Acknowledgements](#acknowledgements) for the upstream project, which also supports cmux, zellij, and WezTerm.
 
 ## How it works
 
-`subagent()` returns immediately. The sub-agent runs in its own named background Herdr tab in the parent's workspace, or a tmux window in the parent's session. Creating a sub-agent never switches your active tab/window or changes your current pane layout. A live widget above the input tracks every running sub-agent, and when one finishes, its result is steered into the main session as a notification that triggers a new turn.
+`subagent()` returns immediately. The sub-agent runs in its own named Herdr Core child terminal, background legacy Herdr tab in the parent's workspace, or tmux window in the parent's session. Core workers stay hidden until explicitly focused. Creating a sub-agent never switches your active tab/window or changes your current pane layout. A live widget above the input tracks every running sub-agent, and when one finishes, its result is steered into the main session as a notification that triggers a new turn.
 
 ```
 ╭─ Subagents ──────────────────────────── 2 running ─╮
@@ -17,15 +17,15 @@ Async subagents for [pi](https://github.com/badlogic/pi-mono), running in native
 
 Spawn several in parallel — they run concurrently and steer results back independently as each finishes.
 
-Each sub-agent tab/window starts with one pane. Switch to it to inspect or interact with the agent; automatic cleanup closes that pane (and its tab/window if it is the last pane). The extension does not rebalance the parent's layout on spawn or exit.
+Each legacy Herdr tab/tmux window starts with one pane; Core uses an independent child terminal. Switch to it to inspect or interact with the agent; automatic cleanup closes that pane (and its tab/window if it is the last pane). The extension does not rebalance the parent's layout on spawn or exit.
 
 ### Open a running subagent
 
-- Press **Ctrl+Alt+S** to choose a running subagent with ↑/↓, then **Enter** to switch to its Herdr tab/pane or tmux window/pane. **Escape** cancels.
+- Press **Ctrl+Alt+S** to choose a running subagent with ↑/↓, then **Enter** to show its Core terminal, legacy Herdr tab/pane, or tmux window/pane. **Escape** cancels.
 - Run **`/subagent-focus`** to open the same picker.
 - Run **`/subagent-focus <name>`** to switch directly. After `/subagent-focus `, press **Tab** repeatedly to cycle through running agent names, wrapping back to the first; press **Enter** to focus the selected agent. Type a prefix to cycle only matching names. Editing resets the cycle, and names containing spaces work without quotes.
 
-These controls work in both regular and fullscreen interactive Pi mode, without mouse capture. If an agent finishes or its pane closes before selection, Pi shows a notification instead of focusing another pane. Completed agents are not reopened. In Herdr, select the main session's tab to return. In tmux, use its last-window binding (normally **Ctrl+B, L**). Herdr focus requires the child to be detected as a running agent; if it is still starting, try again once Pi appears.
+These controls work in both regular and fullscreen interactive Pi mode, without mouse capture. If an agent finishes or its pane closes before selection, Pi shows a notification instead of focusing another pane. Completed agents are not reopened. Core focus uses `herdr-app do agent.focus` and requires the running desktop app and its CLI on `PATH` (or `HERDR_APP_BIN_PATH` pointing to it); headless spawning and result delivery do not require the app. In Herdr, select the main session's tab to return. In tmux, use its last-window binding (normally **Ctrl+B, L**). Herdr focus requires the child to be detected as a running agent; if it is still starting, try again once Pi appears.
 
 If your shell startup is slow and launch commands get dropped before the prompt is ready, raise the delay:
 
@@ -37,7 +37,7 @@ export PI_SUBAGENT_SHELL_READY_DELAY_MS=2500   # default: 500
 
 | Tool | Description |
 | --- | --- |
-| `subagent` | Spawn a sub-agent in a dedicated Herdr tab or tmux window (async) |
+| `subagent` | Spawn a sub-agent in a dedicated Core terminal, legacy Herdr tab, or tmux window (async) |
 | `subagent_message` | Message a sub-agent by name — steers it if running, resumes its session if finished |
 | `subagents_list` | List available agent definitions |
 | `ask_question` | *(sub-agent sessions only)* Ask the orchestrator a question and wait for the reply |
@@ -188,19 +188,27 @@ Status display is configured via `config.json` in the extension directory (copy 
 ## Requirements
 
 - [pi](https://github.com/badlogic/pi-mono)
-- Either [Herdr](https://github.com/herdrdev/herdr) **0.9.5+** or [tmux](https://github.com/tmux/tmux)
+- [Herdr Core](https://github.com/herdrdev/herdr-core), legacy [Herdr](https://github.com/herdrdev/herdr) **0.9.5+**, or [tmux](https://github.com/tmux/tmux)
 
-### Herdr
+### Herdr Core (`hc` / the new desktop app)
+
+Start Pi in a Core-managed terminal. Core supplies `HC_TERMINAL_ID` and `HC_TERMINAL_SOCKET`; `HC_SOCKET` can explicitly override the socket endpoint. The extension uses Core's public newline-delimited JSON-RPC API directly, with bounded requests. No legacy `HERDR_*` variables, nested tmux, or agent templates are required.
+
+Core context takes precedence over inherited legacy Herdr/tmux context. Incomplete context or API failures produce an error rather than launching in another session. Each worker has an explicit parent, starts in the current directory, stays hidden by default, and ends with its parent. The extension keeps its own result delivery and completion detection, so it does not depend on Core recognizing the child's status. Cleanup kills and removes only the child terminal.
+
+The current Core adapter launches a Bash shell, matching the extension's existing Bash launch scripts; Bash must be available on `PATH`. It is tested against Core 0.1.21's protocol-generation-1 API. Explicit focus additionally needs `herdr-app`, as described above.
+
+### Legacy Herdr
 
 Start `pi` in a Herdr-managed terminal. The extension uses Herdr's CLI to create unfocused child tabs in the parent's workspace. No separate Herdr plugin or nested tmux is needed.
 
-Herdr must provide `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID`, with `herdr` on `PATH` (or `HERDR_BIN_PATH` pointing to it). Herdr takes precedence when both Herdr and tmux environments are present. Incomplete Herdr context or CLI/server failures produce an error rather than silently creating terminals in tmux or the currently focused workspace.
+Herdr must provide `HERDR_ENV=1`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID`, with `herdr` on `PATH` (or `HERDR_BIN_PATH` pointing to it). Legacy Herdr takes precedence over tmux when no Core context is present. Incomplete Herdr context or CLI/server failures produce an error rather than silently creating terminals in tmux or the currently focused workspace.
 
 Herdr's managed `herdr-agent-state.ts` integration reports Pi status separately. This extension does not modify it or add it to sandboxed child loadouts.
 
 ### tmux
 
-Outside Herdr, start Pi inside tmux as before:
+Outside Core or legacy Herdr, start Pi inside tmux as before:
 
 ```bash
 tmux new -A -s pi 'pi'
@@ -211,14 +219,22 @@ After updating the extension, wait for active subagents to finish, then run `/re
 ## Tests
 
 ```bash
-npm test                       # unit tests, isolated tmux tests, CLI contract test
+npm test                       # unit tests, fake Core API tests, isolated tmux/legacy tests
 npm run test:surfaces           # real tmux terminals; no model calls
 npm run test:integration        # includes real Pi/model lifecycle tests; requires credentials
 ```
 
 The CLI contract test uses the installed Herdr executable with an isolated test socket, never your live Herdr session. It skips if Herdr is not installed (or on Windows, where the test fixture is Unix-only).
 
-For a no-model Herdr smoke test, run this **inside a Herdr terminal**:
+For a no-model Core smoke test, run this **inside a Core terminal**:
+
+```bash
+HERDR_CORE_RUN_SMOKE=1 node --test test/integration/herdr-core.test.ts
+```
+
+It creates and removes two hidden child terminals, checks literal command execution and completion detection, and does not change the app layout or focus. It makes no model calls and is opt-in.
+
+For a no-model legacy Herdr smoke test, run this **inside a legacy Herdr terminal**:
 
 ```bash
 HERDR_RUN_SMOKE=1 node --test test/integration/herdr.test.ts

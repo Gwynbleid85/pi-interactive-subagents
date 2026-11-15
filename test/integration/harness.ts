@@ -82,7 +82,8 @@ export const PI_TIMEOUT = Number(process.env.PI_TEST_TIMEOUT ?? "120000");
 export function getAvailableBackends(): string[] {
   // This harness has tmux-specific split/focus operations. Native Herdr has
   // its own opt-in smoke test and must not run through this harness.
-  return process.env.HERDR_ENV !== "1" && isTmuxAvailable() ? ["tmux"] : [];
+  return !process.env.HC_TERMINAL_ID && !process.env.HC_TERMINAL_SOCKET &&
+    process.env.HERDR_ENV !== "1" && isTmuxAvailable() ? ["tmux"] : [];
 }
 
 export function focusSurface(surface: string): void {

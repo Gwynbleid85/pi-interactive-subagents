@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSurface, closeSurface } from "../pi-extension/subagents/tmux.ts";
+import { withoutCoreContext } from "./helpers/core-context.ts";
 
 let hasTmux = true;
 try {
@@ -18,6 +19,7 @@ it("creates unfocused named windows in the parent's session without changing its
 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-window-test-"));
   const socket = join(dir, "tmux.sock");
+  const restoreCore = withoutCoreContext();
   const previousTmux = process.env.TMUX;
   const previousPane = process.env.TMUX_PANE;
   const previousHerdr = process.env.HERDR_ENV;
@@ -60,6 +62,7 @@ it("creates unfocused named windows in the parent's session without changing its
     closeSurface(second);
     assert.equal(tmux("list-windows", "-t", "parent", "-F", "#{window_id}"), parentWindow);
   } finally {
+    restoreCore();
     if (previousHerdr === undefined) delete process.env.HERDR_ENV;
     else process.env.HERDR_ENV = previousHerdr;
     if (previousTmux === undefined) delete process.env.TMUX;

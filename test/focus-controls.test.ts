@@ -8,6 +8,7 @@ import subagentsExtension, { __test__ } from "../pi-extension/subagents/index.ts
 import * as surfaces from "../pi-extension/subagents/tmux.ts";
 import { createStatusState } from "../pi-extension/subagents/status.ts";
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { withoutCoreContext } from "./helpers/core-context.ts";
 
 let hasTmux = true;
 try { execFileSync("tmux", ["-V"], { stdio: "ignore" }); } catch { hasTmux = false; }
@@ -179,6 +180,7 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
   let previousTmux: string | undefined;
   let previousPane: string | undefined;
   let previousHerdr: string | undefined;
+  let restoreCore: () => void;
   let parent: string;
   let child: string;
   let parentWindow: string;
@@ -206,6 +208,7 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "pi-focus-test-"));
     socket = join(dir, "tmux.sock");
+    restoreCore = withoutCoreContext();
     previousTmux = process.env.TMUX;
     previousPane = process.env.TMUX_PANE;
     previousHerdr = process.env.HERDR_ENV;
@@ -232,6 +235,7 @@ describe("subagent focus controls", { skip: !hasTmux }, () => {
 
   afterEach(() => {
     __test__.runningSubagents.clear();
+    restoreCore();
     if (previousTmux === undefined) delete process.env.TMUX; else process.env.TMUX = previousTmux;
     if (previousPane === undefined) delete process.env.TMUX_PANE; else process.env.TMUX_PANE = previousPane;
     if (previousHerdr === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = previousHerdr;

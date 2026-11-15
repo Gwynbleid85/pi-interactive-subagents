@@ -32,6 +32,9 @@ function response(value: unknown) {
 describe("Herdr adapter", () => {
   beforeEach(() => {
     savedEnv = { ...process.env };
+    delete process.env.HC_TERMINAL_ID;
+    delete process.env.HC_TERMINAL_SOCKET;
+    delete process.env.HC_SOCKET;
     dir = mkdtempSync(join(tmpdir(), "pi-herdr-test-"));
     writeFileSync(join(dir, "calls"), "");
     writeFileSync(join(dir, "herdr"), `#!${process.execPath}
