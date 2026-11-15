@@ -179,7 +179,10 @@ export function sendLongCommand(
 
   const scriptParts = ["#!/bin/bash"];
   if (options?.scriptPreamble) {
-    scriptParts.push(options.scriptPreamble.trimEnd());
+    // Metadata is never executable shell. Names and paths can contain physical
+    // newlines, so comment every line, not just the caller's template lines.
+    scriptParts.push(options.scriptPreamble.trimEnd().split(/\r\n?|\n/)
+      .map((line) => `# ${line.replace(/^# ?/, "")}`).join("\n"));
   }
   scriptParts.push(command);
 
@@ -297,6 +300,7 @@ export async function pollForExit(
   },
 ): Promise<PollResult> {
   const start = Date.now();
+  let consecutiveReadErrors = 0;
 
   for (;;) {
     if (signal.aborted) {
@@ -327,11 +331,12 @@ export async function pollForExit(
     // Slow path: read terminal screen for sentinel (crash detection)
     try {
       const screen = await readScreenAsync(surface, 5);
+      consecutiveReadErrors = 0;
       const match = screen.match(/__SUBAGENT_DONE_(\d+)__/);
       if (match) {
         return { reason: "sentinel", exitCode: parseInt(match[1], 10) };
       }
-    } catch {
+    } catch (error) {
       // Surface may have been destroyed — check if .exit file appeared in the meantime
       if (options.sessionFile) {
         try {
@@ -342,6 +347,14 @@ export async function pollForExit(
             return interpretExitSidecar(data);
           }
         } catch {}
+      }
+      if (options.sentinelFile && existsSync(options.sentinelFile)) {
+        return { reason: "sentinel", exitCode: 0 };
+      }
+      // A short outage can recover, but a closed pane or unavailable server
+      // must not leave a child registered as running forever.
+      if (++consecutiveReadErrors >= 3) {
+        throw new Error(`Terminal read failed after 3 consecutive attempts: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 

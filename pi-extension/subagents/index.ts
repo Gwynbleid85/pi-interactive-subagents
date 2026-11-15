@@ -551,13 +551,14 @@ function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
 function resolveResultPresentation(
   result: Pick<
     SubagentResult,
-    "exitCode" | "elapsed" | "summary" | "sessionFile" | "sessionId" | "errorMessage"
+    "exitCode" | "elapsed" | "summary" | "sessionFile" | "sessionId" | "errorMessage" | "cleanupError"
   >,
   name: string,
 ): string {
   // Name is the persistent handle: the same name steers a running subagent or
   // resumes a finished one, so follow-ups always reference it.
-  const sessionRef = `\n\nFollow up with subagent_message({ name: "${name}", message: "…" })`;
+  const cleanupWarning = result.cleanupError ? `\n\nTerminal cleanup warning: ${result.cleanupError}` : "";
+  const sessionRef = `${cleanupWarning}\n\nFollow up with subagent_message({ name: "${name}", message: "…" })`;
 
   if (result.errorMessage) {
     // Auto-retry exhausted or other agent-loop error. The subagent did not
@@ -594,6 +595,8 @@ interface SubagentResult {
   error?: string;
   /** Provider/agent error message when auto-retry exhausted (overload, rate limit, etc.). */
   errorMessage?: string;
+  /** Terminal cleanup failed, without changing the child's completion result. */
+  cleanupError?: string;
   /** Aggregate usage/model/tool stats parsed from the completed session file. */
   stats?: SessionStats;
 }
@@ -1562,6 +1565,23 @@ async function watchSubagent(
   running: RunningSubagent,
   signal: AbortSignal,
 ): Promise<SubagentResult> {
+  const result = await collectSubagentResult(running, signal);
+  // Cleanup is not part of the child's outcome. Never discard an extracted
+  // result or retry a mutation just because the terminal has already closed.
+  try {
+    closeSurface(running.surface);
+  } catch (error) {
+    result.cleanupError = error instanceof Error ? error.message : String(error);
+  } finally {
+    runningSubagents.delete(running.id);
+  }
+  return result;
+}
+
+async function collectSubagentResult(
+  running: RunningSubagent,
+  signal: AbortSignal,
+): Promise<SubagentResult> {
   const { name, task, surface, startTime, sessionFile } = running;
 
   try {
@@ -1607,9 +1627,6 @@ async function watchSubagent(
         try { unlinkSync(running.sentinelFile + ".transcript"); } catch {}
       }
 
-      closeSurface(surface);
-      runningSubagents.delete(running.id);
-
       return { name, task, summary, exitCode: result.exitCode, elapsed, ...(sessionId ? { claudeSessionId: sessionId } : {}) };
     }
 
@@ -1635,9 +1652,6 @@ async function watchSubagent(
     const stats = existsSync(sessionFile) ? summarizeSessionStats(sessionFile) : null;
     const subagentSessionId = existsSync(sessionFile) ? getSessionId(sessionFile) : null;
 
-    closeSurface(surface);
-    runningSubagents.delete(running.id);
-
     return {
       name,
       task,
@@ -1650,11 +1664,6 @@ async function watchSubagent(
       ...(stats ? { stats } : {}),
     };
   } catch (err: any) {
-    try {
-      closeSurface(surface);
-    } catch {}
-    runningSubagents.delete(running.id);
-
     if (signal.aborted) {
       return {
         name,
@@ -1899,6 +1908,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                   sessionFile: result.sessionFile,
                   ...(result.sessionId ? { sessionId: result.sessionId } : {}),
                   ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+                  ...(result.cleanupError ? { cleanupError: result.cleanupError } : {}),
                   ...(result.claudeSessionId ? { claudeSessionId: result.claudeSessionId } : {}),
                   ...(result.stats ? { stats: result.stats } : {}),
                 },
@@ -2342,6 +2352,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
                   sessionFile: sessionPath,
                   sessionId: resumedSessionId,
                   ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
+                  ...(result.cleanupError ? { cleanupError: result.cleanupError } : {}),
                 },
               },
               { triggerTurn: true, deliverAs: "steer" },

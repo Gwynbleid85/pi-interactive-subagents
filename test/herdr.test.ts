@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +10,7 @@ import { join } from "node:path";
 import * as adapter from "../pi-extension/subagents/herdr.ts";
 import * as surfaces from "../pi-extension/subagents/tmux.ts";
 import { getAvailableBackends } from "./integration/harness.ts";
+import subagentsExtension, { __test__ as subagentTest } from "../pi-extension/subagents/index.ts";
 
 const pane = (pane_id = "w7:p1", tab_id = "w7:t1") => ({
   pane_id, terminal_id: "terminal-test", workspace_id: "w7", tab_id,
@@ -39,8 +41,18 @@ const dir = __dirname;
 const args = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, 'calls'), JSON.stringify(args) + '\\n');
 if (args[0] === '--version') { console.log('herdr 0.9.5'); process.exit(0); }
-if (process.env.HERDR_TEST_FAIL) { console.error('server unavailable'); process.exit(1); }
+if (process.env.HERDR_TEST_FAIL) {
+ if (process.env.HERDR_TEST_LATE_EXIT) fs.writeFileSync(process.env.HERDR_TEST_LATE_EXIT, JSON.stringify({type:'error',errorMessage:'late provider failure'}));
+ console.error(process.env.HERDR_TEST_ERROR || 'server unavailable'); process.exit(1);
+}
+if (args[0] === 'pane' && args[1] === 'read' && process.env.HERDR_TEST_READ_RESULTS) {
+ const reads = fs.readFileSync(path.join(dir, 'calls'), 'utf8').trim().split('\\n').map(JSON.parse).filter(a => a[0] === 'pane' && a[1] === 'read').length;
+ const result = JSON.parse(process.env.HERDR_TEST_READ_RESULTS)[reads - 1];
+ if (typeof result === 'string') { console.log(result); process.exit(0); }
+ console.error('transient read error'); process.exit(1);
+}
 if (process.env.HERDR_TEST_STALL) { setTimeout(() => {}, 10000); return; }
+if (args[0] === 'pane' && args[1] === 'close' && process.env.HERDR_TEST_CLOSE_FAIL) { console.error('pane already closed'); process.exit(1); }
 if (fs.existsSync(path.join(dir, 'response'))) {
  const value = JSON.parse(fs.readFileSync(path.join(dir, 'response'), 'utf8'));
  console.log(typeof value === 'string' ? value : JSON.stringify(value)); return;
@@ -57,6 +69,10 @@ else { console.log(JSON.stringify({id:'test',result:{type:'ok'}})); }
     delete process.env.HERDR_BIN_PATH;
     delete process.env.HERDR_TEST_FAIL;
     delete process.env.HERDR_TEST_STALL;
+    delete process.env.HERDR_TEST_ERROR;
+    delete process.env.HERDR_TEST_LATE_EXIT;
+    delete process.env.HERDR_TEST_READ_RESULTS;
+    delete process.env.HERDR_TEST_CLOSE_FAIL;
     process.env.HERDR_ENV = "1";
     process.env.HERDR_SOCKET_PATH = join(dir, "herdr.sock");
     process.env.HERDR_PANE_ID = "w7:p1";
@@ -180,6 +196,23 @@ else { console.log(JSON.stringify({id:'test',result:{type:'ok'}})); }
     ]);
   });
 
+  it("keeps multiline launch/resume metadata inert when the generated script executes", () => {
+    const injected = join(dir, "injected");
+    const intended = join(dir, "intended");
+    const name = `worker\nprintf INJECTED > ${surfaces.shellEscape(injected)}`;
+    const session = `session\r\nprintf INJECTED > ${surfaces.shellEscape(injected)}\n`;
+    for (const kind of ["Subagent launch", "Claude Code subagent launch", "Subagent resume"]) {
+      const scriptPath = join(dir, "launch.sh");
+      surfaces.sendLongCommand("herdr:w7:p9", `printf OK > ${surfaces.shellEscape(intended)}`, {
+        scriptPath,
+        scriptPreamble: `# ${kind} script for ${name}\n# Session: ${session}\n# Surface: herdr:w7:p9`,
+      });
+      execFileSync("bash", [scriptPath]);
+      assert.equal(existsSync(injected), false, `${kind} metadata executed a command`);
+      assert.equal(readFileSync(intended, "utf8"), "OK");
+    }
+  });
+
   it("preserves sandboxed script contents when submitting through Herdr", () => {
     const script = join(dir, "child 'script.sh");
     const command = "pi --no-extensions --tools 'read' -e '/safe/extension.ts'";
@@ -195,6 +228,36 @@ else { console.log(JSON.stringify({id:'test',result:{type:'ok'}})); }
     assert.deepEqual(await surfaces.pollForExit("herdr:w7:p9", signal, { interval: 1 }), { reason: "sentinel", exitCode: 23 });
   });
 
+  it("terminates closed-pane and disconnected-server polling with the original diagnostic", async () => {
+    process.env.HERDR_TEST_FAIL = "1";
+    for (const diagnostic of ["pane not found", "socket disconnected"]) {
+      writeFileSync(join(dir, "calls"), "");
+      process.env.HERDR_TEST_ERROR = diagnostic;
+      await assert.rejects(surfaces.pollForExit("herdr:w7:p9", AbortSignal.timeout(2000), { interval: 1 }), (error: Error) => {
+        assert.match(error.message, /3 consecutive/);
+        assert.ok(error.message.includes(diagnostic), error.message);
+        return true;
+      });
+      assert.equal(calls().length, 3);
+    }
+  });
+
+  it("allows transient read recovery and resets the consecutive error budget", async () => {
+    process.env.HERDR_TEST_READ_RESULTS = JSON.stringify([null, null, "working", null, null, "__SUBAGENT_DONE_0__"]);
+    assert.deepEqual(await surfaces.pollForExit("herdr:w7:p9", AbortSignal.timeout(2000), { interval: 1 }), { reason: "sentinel", exitCode: 0 });
+    assert.equal(calls().length, 6);
+  });
+
+  it("preserves a completion sidecar written during a failed read", async () => {
+    const sessionFile = join(dir, "late.jsonl");
+    process.env.HERDR_TEST_FAIL = "1";
+    process.env.HERDR_TEST_LATE_EXIT = sessionFile + ".exit";
+    assert.deepEqual(await surfaces.pollForExit("herdr:w7:p9", AbortSignal.timeout(2000), { interval: 1, sessionFile }), {
+      reason: "error", exitCode: 1, errorMessage: "late provider failure",
+    });
+    assert.equal(calls().length, 1);
+  });
+
   it("preserves error sidecars and aborts without reading the terminal", async () => {
     const sessionFile = join(dir, "session.jsonl");
     writeFileSync(sessionFile + ".exit", JSON.stringify({ type: "error", errorMessage: "provider failed" }));
@@ -205,6 +268,60 @@ else { console.log(JSON.stringify({id:'test',result:{type:'ok'}})); }
     await assert.rejects(surfaces.pollForExit("herdr:w7:p9", controller.signal, { interval: 1 }), /Aborted/);
     assert.deepEqual(calls(), []);
   });
+
+  for (const outcome of ["clean", "nonzero", "error-sidecar"]) {
+    it(`delivers the original ${outcome} result once when terminal cleanup fails`, async () => {
+      process.env.PI_CODING_AGENT_DIR = dir;
+      process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS = "0";
+      delete process.env.PI_SUBAGENT_ALLOWED;
+      process.env.HERDR_TEST_CLOSE_FAIL = "1";
+      process.env.HERDR_TEST_READ_RESULTS = JSON.stringify([outcome === "error-sidecar" ? "working" : `__SUBAGENT_DONE_${outcome === "nonzero" ? 7 : 0}__`]);
+      mkdirSync(join(dir, "agents"));
+      writeFileSync(join(dir, "agents", "cleanup-test.md"), "---\nname: cleanup-test\ndescription: Test cleanup\ntools: read\nsession-mode: standalone\n---\nTest agent.\n");
+      const parent = join(dir, "parent.jsonl");
+      writeFileSync(parent, JSON.stringify({ type: "session", version: 3, id: "parent", timestamp: new Date().toISOString(), cwd: dir }) + "\n");
+      const tools = new Map<string, any>();
+      const events = new Map<string, Function>();
+      const delivered: any[] = [];
+      let received!: (message: any) => void;
+      const delivery = new Promise<any>((resolve) => { received = resolve; });
+      subagentsExtension({
+        on(name: string, handler: Function) { events.set(name, handler); },
+        registerTool(tool: any) { tools.set(tool.name, tool); },
+        registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {},
+        sendMessage(message: any) { if (message.customType === "subagent_result") { delivered.push(message); received(message); } },
+      } as any);
+      const ctx = { cwd: dir, hasUI: false, mode: "print", sessionManager: { getSessionFile: () => parent, getSessionId: () => "parent", getSessionDir: () => dir } };
+      events.get("session_start")?.({}, ctx);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const ack = await tools.get("subagent").execute("test-call", { agent: "cleanup-test", name: "worker", task: "test result" }, new AbortController().signal, undefined, ctx);
+        const sessionFile = ack.details.sessionFile;
+        assert.equal(typeof sessionFile, "string");
+        mkdirSync(join(sessionFile, ".."), { recursive: true });
+        writeFileSync(sessionFile, [
+          { type: "session", version: 3, id: "child-session", timestamp: new Date().toISOString(), cwd: dir },
+          { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Original final answer" }], model: "test-model", usage: { input: 12, output: 4 } } },
+        ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+        if (outcome === "error-sidecar") writeFileSync(sessionFile + ".exit", JSON.stringify({ type: "error", errorMessage: "original provider error" }));
+        const message = await Promise.race([delivery, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("result delivery timed out")), 4000); })]);
+        assert.equal(message.details.exitCode, outcome === "error-sidecar" ? 1 : outcome === "nonzero" ? 7 : 0);
+        assert.equal(message.details.sessionId, "child-session");
+        assert.equal(message.details.sessionFile, sessionFile);
+        assert.equal(message.details.stats.model, "test-model");
+        assert.match(message.details.cleanupError, /pane already closed/);
+        if (outcome === "error-sidecar") assert.equal(message.details.errorMessage, "original provider error");
+        else assert.match(message.content, /Original final answer/);
+        assert.match(message.content, /cleanup warning/i);
+        assert.equal(delivered.length, 1);
+        assert.equal(subagentTest.runningSubagents.size, 0);
+        assert.equal(calls().filter((args) => args[0] === "pane" && args[1] === "close").length, 1);
+      } finally {
+        if (timer) clearTimeout(timer);
+        events.get("session_shutdown")?.({}, ctx);
+      }
+    });
+  }
 
   it("bounds a stalled CLI command", () => {
     assert.equal(typeof adapter.closeHerdrSurface, "function");
