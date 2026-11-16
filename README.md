@@ -1,14 +1,82 @@
-# pi-interactive-subagents
+<div align="center">
 
-Async subagents for [pi](https://github.com/badlogic/pi-mono), running in native [Herdr Core](https://github.com/herdrdev/herdr-core) child terminals, legacy [Herdr](https://github.com/herdrdev/herdr) tabs, or tmux windows. Spawn a sub-agent, keep working in the main session, and get the result steered back when it finishes. Fully non-blocking.
+<h1>pi-interactive-subagents</h1>
 
-**Herdr Core + legacy Herdr + tmux fork.** See [Acknowledgements](#acknowledgements) for the upstream project, which also supports cmux, zellij, and WezTerm.
+<p><strong>Delegate in parallel. Keep your focus. Get results back.</strong></p>
+
+<p>Async subagents for <a href="https://github.com/badlogic/pi-mono">Pi</a>, running in their own terminals.<br>Spawn a worker, carry on in your main session, and receive its answer when it finishes.</p>
+
+<p>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License: MIT"></a>
+  <a href="#herdr-core-hc--the-new-desktop-app"><img src="https://img.shields.io/badge/backend-Herdr_Core-6366f1?style=flat-square" alt="Backend: Herdr Core"></a>
+  <a href="#legacy-herdr"><img src="https://img.shields.io/badge/backend-Herdr-6366f1?style=flat-square" alt="Backend: legacy Herdr"></a>
+  <a href="#tmux"><img src="https://img.shields.io/badge/backend-tmux-16a34a?style=flat-square" alt="Backend: tmux"></a>
+</p>
+
+<p>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#custom-agents">Custom agents</a> ·
+  <a href="#status-widget--configuration">Configuration</a> ·
+  <a href="#tests">Tests</a>
+</p>
+
+</div>
+
+---
+
+Run focused agents without giving up your main terminal:
+
+- **Parallel work** — dispatch several agents; each result returns independently.
+- **Background terminals** — keep your current focus and pane layout unchanged.
+- **Live visibility** — track activity in a widget and open a worker when you need to.
+- **Persistent conversations** — message a running agent or resume a finished one by name.
+- **Explicit tool access** — define each agent's tool allowlist and permitted child agents.
+
+> [!NOTE]
+> This fork supports **Herdr Core, legacy Herdr, and tmux**. The [upstream project](#acknowledgements) also supports cmux, zellij, and WezTerm.
+
+## Quick start
+
+### 1. Check prerequisites
+
+You need [Pi](https://github.com/badlogic/pi-mono), a configured model provider, and one supported terminal backend:
+
+- [Herdr Core](https://github.com/herdrdev/herdr-core) — start Pi in a Core-managed terminal.
+- Legacy [Herdr](https://github.com/herdrdev/herdr) **0.9.5+** — start Pi in a Herdr-managed terminal.
+- [tmux](https://github.com/tmux/tmux) — start Pi inside a tmux session.
+
+See [Backend setup](#backend-setup) for environment variables and focus requirements. The [bundled agents](#bundled-agents) use OpenRouter models; configure access to those models or [define your own agents](#custom-agents) before spawning.
+
+### 2. Install this fork
+
+```bash
+pi install git:github.com/Gwynbleid85/pi-interactive-subagents
+```
+
+In an existing Pi session, wait for active subagents to finish, then run `/reload` or restart Pi.
+
+### 3. Delegate a task
+
+In Pi, run:
+
+```text
+/subagent scout Analyze the authentication module and summarize its entry points
+```
+
+Keep working while the scout runs. Its result returns to your main session automatically. Press **Ctrl+Alt+S** to open a running agent, or use `/subagent-focus`.
 
 ## How it works
 
-`subagent()` returns immediately. The sub-agent runs in its own named Herdr Core child terminal, background legacy Herdr tab in the parent's workspace, or tmux window in the parent's session. Core workers stay hidden until explicitly focused. Creating a sub-agent never switches your active tab/window or changes your current pane layout. A live widget above the input tracks every running sub-agent, and when one finishes, its result is steered into the main session as a notification that triggers a new turn.
+`subagent()` returns immediately. Each worker runs in its own terminal, while a widget above the input tracks its activity. When a worker finishes, the extension steers its result into the main session as a notification that triggers a new turn. No polling is needed.
 
-```
+| Backend | Where workers run | Focus and layout |
+| --- | --- | --- |
+| Herdr Core | Named child terminals linked to the parent | Hidden until explicitly focused; parent layout stays unchanged |
+| Legacy Herdr | Background tabs in the parent's workspace | Active tab and parent layout stay unchanged |
+| tmux | Named background windows in the parent's session | Active window and parent layout stay unchanged |
+
+```text
 ╭─ Subagents ──────────────────────────── 2 running ─╮
 │ 00:23  scout      active · bash 7m                 │
 │ 00:45  scout-2    waiting 2m                       │
@@ -33,7 +101,9 @@ If your shell startup is slow and launch commands get dropped before the prompt 
 export PI_SUBAGENT_SHELL_READY_DELAY_MS=2500   # default: 500
 ```
 
-## Tools
+## Usage
+
+### Tools
 
 | Tool | Description |
 | --- | --- |
@@ -76,7 +146,7 @@ Every spawn records name → session file in `artifacts/<sessionId>/subagent-reg
 
 **Resume replays the original sandbox.** At spawn time the fully-resolved loadout — tool allowlist, backing extensions, model, thinking level, system prompt, spawn whitelist, cwd — is snapshotted to `<session>.loadout.json`. Resume rebuilds the exact same restricted process from that snapshot rather than relaunching unrestricted.
 
-### ask_question
+### Asking the orchestrator
 
 A sub-agent can ask its orchestrator a single freeform question when requirements are ambiguous or a decision materially affects the work. The session **stays open** (parked as `waiting`) instead of exiting; the parent is notified with the sub-agent's name, replies via `subagent_message({ name, message })`, and the reply arrives as the sub-agent's next turn. Parallel questions are supported — each waiting sub-agent has its own name.
 
@@ -160,7 +230,7 @@ Extensions can register additional tools for sub-agents at runtime via `register
 
 `cwd` starts a sub-agent in a directory with its own config, so role-specific setups (CLAUDE.md, skills, extensions) apply:
 
-```
+```text
 project/
 └── agents/
     ├── game-designer/   ← CLAUDE.md, .pi/…
@@ -185,10 +255,9 @@ Status display is configured via `config.json` in the extension directory (copy 
 }
 ```
 
-## Requirements
+## Backend setup
 
-- [pi](https://github.com/badlogic/pi-mono)
-- [Herdr Core](https://github.com/herdrdev/herdr-core), legacy [Herdr](https://github.com/herdrdev/herdr) **0.9.5+**, or [tmux](https://github.com/tmux/tmux)
+The extension selects the backend from the current terminal's environment, in this order: **Herdr Core → legacy Herdr → tmux**. Start Pi in the backend you want to use. Incomplete Core or Herdr context produces an error rather than silently falling back to another backend.
 
 ### Herdr Core (`hc` / the new desktop app)
 
@@ -248,4 +317,4 @@ Forked from [HazAT/pi-interactive-subagents](https://github.com/HazAT/pi-interac
 
 ## License
 
-MIT
+[MIT](./LICENSE)
