@@ -40,7 +40,7 @@ Run focused agents without giving up your main terminal:
 
 ### 1. Check prerequisites
 
-You need [Pi](https://github.com/badlogic/pi-mono), a configured model provider, and one supported terminal backend:
+You need [Pi 1.5.2+](https://github.com/earendil-works/pi), a configured model provider, and one supported terminal backend. The bundled question UI uses the current Pi TUI and prompt-lifecycle APIs:
 
 - [Herdr Core](https://github.com/herdrdev/herdr-core) — start Pi in a Core-managed terminal.
 - Legacy [Herdr](https://github.com/herdrdev/herdr) **0.9.5+** — start Pi in a Herdr-managed terminal.
@@ -53,6 +53,8 @@ See [Backend setup](#backend-setup) for environment variables and focus requirem
 ```bash
 pi install git:github.com/Gwynbleid85/pi-interactive-subagents
 ```
+
+This installs the subagent extension, `ask_user_question`, and the legacy Herdr prompt bridge by default. If you previously installed standalone copies of the question tool or bridge, follow [Migrating standalone question extensions](#migrating-standalone-question-extensions) before reloading.
 
 In an existing Pi session, wait for active subagents to finish, then run `/reload` or restart Pi.
 
@@ -111,8 +113,34 @@ export PI_SUBAGENT_SHELL_READY_DELAY_MS=2500   # default: 500
 | `subagent_message` | Message a sub-agent by name — steers it if running, resumes its session if finished |
 | `subagents_list` | List available agent definitions |
 | `ask_question` | *(sub-agent sessions only)* Ask the orchestrator a question and wait for the reply |
+| `ask_user_question` | Ask the human user one question using free text, a single choice, or multiple choices |
 
 There is also a `/subagent <agent> <task>` command for spawning directly.
+
+### User questions and waiting status
+
+`ask_user_question` is separate from `ask_question`: the former opens a human-facing dialog in the current Pi session; the latter sends a worker's question to its parent agent. It does not change the worker-to-parent protocol or grant extra tools to restricted workers.
+
+For `ask_user_question`, provide a `question`, optional `details`, and optional `options` containing labels, values, and descriptions. Omit options for free-text input; set `multiSelect: true` for multiple choices. Choice dialogs always include an **Other** field for a custom answer. **Escape** cancels. Only one popup is shown at a time through the shared UI mutex.
+
+In **Herdr Core**, the choice dialogs explicitly request Pi's native blocked status (`kind: question`) while visible. Pi restores the appropriate status when they close. Free-text questions use Pi's built-in editor, which already handles native waiting status. This lets Core apply its waiting appearance and notifications, subject to your notification settings.
+
+In **legacy Herdr**, `herdr-ui-prompts.ts` forwards Pi's blocking prompt lifecycle to the `herdr:blocked` event bus. This requires Herdr's managed `herdr-agent-state.ts` integration; the bridge does not install or replace it. It covers other extensions' blocking dialogs too, ignores non-TUI sessions, and balances its own signal on completion or shutdown. It does not send native status reports or require a Herdr app mod.
+
+### Migrating standalone question extensions
+
+Load only **one** copy of each extension. If you previously installed `ask-user-question.ts` and `herdr-ui-prompts.ts` directly in `~/.pi/agent/extensions/`, move those copies outside extension discovery before using the bundled versions. For the default Pi config directory:
+
+```bash
+mkdir -p ~/.pi/agent/extension-backups
+for file in ask-user-question.ts herdr-ui-prompts.ts; do
+  if [ -f "$HOME/.pi/agent/extensions/$file" ]; then
+    mv -i "$HOME/.pi/agent/extensions/$file" "$HOME/.pi/agent/extension-backups/$file"
+  fi
+done
+```
+
+If Pi uses a custom config directory, adjust those paths. Also remove any explicit settings/CLI references to the standalone copies, then run `/reload` or restart Pi. **Keep Herdr's managed `herdr-agent-state.ts`**—it is not a duplicate of the bridge. No changes to your global files happen automatically when this repository is edited.
 
 ### Spawning
 
